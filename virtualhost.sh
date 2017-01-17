@@ -6,6 +6,8 @@ TEXTDOMAIN=virtualhost
 action=$1
 domain=$2
 rootDir=$3
+cname=$(echo $domain | awk -F. '{print $1}')
+server_ip=$(hostname -I | awk '{print $1}')
 owner=$(who am i | awk '{print $1}')
 email='webmaster@localhost'
 sitesEnable='/etc/apache2/sites-enabled/'
@@ -22,7 +24,7 @@ fi
 
 if [ "$action" != 'create' ] && [ "$action" != 'delete' ]
 	then
-		echo $"You need to prompt for action (create or delete) -- Lower-case only"
+		echo $"Usage: virtualhost [ create | delete ] DOMAIN_NAME"
 		exit 1;
 fi
 
@@ -33,7 +35,7 @@ do
 done
 
 if [ "$rootDir" == "" ]; then
-	rootDir=${domain//./}
+	rootDir=$domain
 fi
 
 ### if root dir starts with '/', don't use /var/www as default starting point
@@ -58,34 +60,33 @@ if [ "$action" == 'create' ]
 			### give permission to root dir
 			chmod 755 $rootDir
 			### write test file in the new domain dir
-			if ! echo "<?php echo phpinfo(); ?>" > $rootDir/phpinfo.php
+			if ! echo "
+<html>
+  <head>
+    <title>Bienvenido a $domain</title>
+  </head>
+  <body>
+    <h1>El virtual host $domain funciona</h1>
+  </body>
+</html>" > $rootDir/index.html
 			then
-				echo $"ERROR: Not able to write in file $rootDir/phpinfo.php. Please check permissions"
+				echo $"ERROR: Not able to write in file $rootDir/index.html. Please check permissions"
 				exit;
 			else
-				echo $"Added content to $rootDir/phpinfo.php"
+				echo $"Added content to $rootDir/index.html"
 			fi
 		fi
 
 		### create virtual host rules file
 		if ! echo "
-		<VirtualHost *:80>
-			ServerAdmin $email
-			ServerName $domain
-			ServerAlias $domain
-			DocumentRoot $rootDir
-			<Directory />
-				AllowOverride All
-			</Directory>
-			<Directory $rootDir>
-				Options Indexes FollowSymLinks MultiViews
-				AllowOverride all
-				Require all granted
-			</Directory>
-			ErrorLog /var/log/apache2/$domain-error.log
-			LogLevel error
-			CustomLog /var/log/apache2/$domain-access.log combined
-		</VirtualHost>" > $sitesAvailabledomain
+<VirtualHost *:80>
+	ServerAdmin $email
+	ServerName $domain
+	ServerAlias $domain
+	DocumentRoot $rootDir
+	ErrorLog /var/log/apache2/$domain-error.log
+	CustomLog /var/log/apache2/$domain-access.log combined
+</VirtualHost>" > $sitesAvailabledomain
 		then
 			echo -e $"There is an ERROR creating $domain file"
 			exit;
@@ -93,27 +94,30 @@ if [ "$action" == 'create' ]
 			echo -e $"\nNew Virtual Host Created\n"
 		fi
 
-		### Add domain in /etc/hosts
-		if ! echo "127.0.0.1	$domain" >> /etc/hosts
+### Add domain in bind9 zone
+		if ! echo "$cname	IN	A	$server_ip" >> /var/cache/bind/db.pwn
 		then
-			echo $"ERROR: Not able to write in /etc/hosts"
+			echo $"ERROR: Not able to write in /var/cache/bind/db.pwn"
 			exit;
 		else
 			echo -e $"Host added to /etc/hosts file \n"
 		fi
 
-		if [ "$owner" == "" ]; then
-			chown -R $(whoami):$(whoami) $rootDir
-		else
-			chown -R $owner:$owner $rootDir
-		fi
+#		if [ "$owner" == "" ]; then
+#			chown -R $(whoami):$(whoami) $rootDir
+#		else
+#			chown -R $owner:$owner $rootDir
+#		fi
 
 		### enable website
 		a2ensite $domain
 
 		### restart Apache
 		/etc/init.d/apache2 reload
+		/etc/init.d/bind9 reload
 
+		### test if the domain is populated
+		nslookup $domain
 		### show the finished message
 		echo -e $"Complete! \nYou now have a new Virtual Host \nYour new host is: http://$domain \nAnd its located at $rootDir"
 		exit;
@@ -123,16 +127,14 @@ if [ "$action" == 'create' ]
 			echo -e $"This domain does not exist.\nPlease try another one"
 			exit;
 		else
-			### Delete domain in /etc/hosts
-			newhost=${domain//./\\.}
-			sed -i "/$newhost/d" /etc/hosts
-
+			### Delete domain in /var/cache/bind/db.pwn
+			sed -i "/\<$cname\>/d" /var/cache/bind/db.pwn
 			### disable website
 			a2dissite $domain
 
 			### restart Apache
 			/etc/init.d/apache2 reload
-
+			/etc/init.d/bind9 reload
 			### Delete virtual host rules files
 			rm $sitesAvailabledomain
 		fi
@@ -157,3 +159,4 @@ if [ "$action" == 'create' ]
 		echo -e $"Complete!\nYou just removed Virtual Host $domain"
 		exit 0;
 fi
+
